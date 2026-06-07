@@ -1,122 +1,153 @@
-# Project Starter
+# Tekumi — Your AI Gaming Discovery Agent
 
-This is the starter template for ElizaOS projects.
+**Tekumi** is an [ElizaOS](https://elizaos.ai) agent that helps gamers find their next favorite game, track the best deals across stores, and stay on top of gaming news — all through natural conversation.
+
+Built with pluggable APIs (RAWG, CheapShark, Steam, NewsAPI) and deployable via Telegram or headless chat.
+
+---
 
 ## Features
 
-- Pre-configured project structure for ElizaOS development
-- Comprehensive testing setup with component and e2e tests
-- Default character configuration with plugin integration
-- Example service, action, and provider implementations
-- TypeScript configuration for optimal developer experience
-- Built-in documentation and examples
+- **Game Search** — Search by title, genre, platform, or mood via RAWG
+- **Deal Tracking** — Live discounts across Steam, GOG, Epic, and more via CheapShark
+- **Gaming News** — Industry headlines from NewsAPI and per-game Steam news
+- **Steam News** — Direct patch notes and updates via the Steam API
+- **Personalized Recommendations** — Context-aware suggestions with store links
 
-## Getting Started
+## Architecture
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                     ElizaOS Runtime                          │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────────────┐  │
+│  │ SEARCH   │ │ GET      │ │ GAME     │ │ STEAM          │  │
+│  │ _GAMES   │ │ _DEALS   │ │ _NEWS    │ │ _NEWS          │  │
+│  └────┬─────┘ └────┬─────┘ └────┬─────┘ └───────┬────────┘  │
+│       │            │            │               │           │
+│       └────────────┴────────────┴───────────────┘           │
+│                            │                                 │
+│                  ┌─────────▼──────────┐                      │
+│                  │   GamingService    │                      │
+│                  │  (RAWG / CheapShark │                      │
+│                  │   / Steam / NewsAPI)│                      │
+│                  └────────────────────┘                      │
+│                            │                                 │
+│  ┌─────────────────────────▼──────────────────────────────┐  │
+│  │                 GAMING_CONTEXT Provider                 │  │
+│  │    (injects live news into agent prompt context)        │  │
+│  └────────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### Plugin: `tekumi-gaming`
+
+| Action | Trigger | Source |
+|--------|---------|--------|
+| `SEARCH_GAMES` | "find me open world RPGs" | RAWG API |
+| `GET_DEALS` | "any deals on Hades?" | CheapShark |
+| `GAME_NEWS` | "what's new in gaming?" | NewsAPI + Steam (per-game) |
+| `STEAM_NEWS` | "steam news for Elden Ring" | Steam API |
+
+A `GAMING_CONTEXT` provider enriches the agent's context with live headlines so every response is grounded in real data.
+
+---
+
+## Quick Start
 
 ```bash
-# Create a new project
-elizaos create --type project my-project
-# Dependencies are automatically installed and built
+# Install dependencies
+bun install
 
-# Navigate to the project directory
-cd my-project
+# Copy and configure environment
+cp .env.example .env
+# Edit .env with your API keys (see Configuration below)
 
-# Start development immediately
-elizaos dev
+# Start in development mode
+bun run dev
 ```
+
+### Configuration
+
+Tekumi requires at least one API key to function:
+
+| Variable | Required | Source | Free Tier? |
+|----------|----------|--------|------------|
+| `RAWG_API_KEY` | Yes (search) | [rawg.io/signup](https://rawg.io/signup) | ✅ 20k calls/mo |
+| `NEWSAPI_KEY` | Yes (news) | [newsapi.org](https://newsapi.org) | ✅ 100 calls/day |
+| `TEKUMI_AFFILIATE_TAG` | No | Your Steam partner tag | Optional |
+
+**Model provider** (pick one):
+- `OPENROUTER_API_KEY` — get one at [openrouter.ai](https://openrouter.ai)
+- `OPENAI_API_KEY` — get one at [platform.openai.com](https://platform.openai.com)
+- Set `OLLAMA_API_ENDPOINT` for local models
+
+**Optional integrations:**
+- `TELEGRAM_BOT_TOKEN` — deploy as a Telegram bot
+
+---
+
+## Usage Examples
+
+```
+User:  find me souls-like games
+Tekumi: 🎮 Games matching "souls-like":
+        - Lies of P (2023) ★4.2
+          Genres: Action, RPG
+          Platforms: PC, PS5, Xbox
+
+User:  any deals on Hades?
+Tekumi: 💰 Deals for "Hades":
+        - Hades — $9.99 (was $24.99, -60%)
+          https://store.steampowered.com/app/1145360
+
+User:  steam news for Elden Ring
+Tekumi: 🎮 Steam News for "Elden Ring":
+        - 2024-06-21 — [Elden Ring Patch 1.12 Available Now] (Steam)
+
+User:  what's new in gaming?
+Tekumi: 📰 Latest gaming news:
+        - 2024-06-21 — [Summer Game Fest roundup] (IGN)
+        - 2024-06-20 — [New AAA title announced] (Kotaku)
+```
+
+---
 
 ## Development
 
 ```bash
-# Start development with hot-reloading (recommended)
-elizaos dev
+# Build
+bun run build
 
-# OR start without hot-reloading
-elizaos start
-# Note: When using 'start', you need to rebuild after changes:
-# bun run build
+# Type check
+bun run type-check
 
-# Test the project
-elizaos test
+# Run tests
+bun run test
+
+# Lint
+bun run lint
 ```
 
-## Testing
+---
 
-ElizaOS employs a dual testing strategy:
+## Deployment
 
-1. **Component Tests** (`src/__tests__/*.test.ts`)
+```bash
+# Production build
+bun run build
 
-   - Run with Bun's native test runner
-   - Fast, isolated tests using mocks
-   - Perfect for TDD and component logic
+# Start with a specific character
+NODE_ENV=production bun run dev
 
-2. **E2E Tests** (`src/__tests__/e2e/*.e2e.ts`)
-   - Run with ElizaOS custom test runner
-   - Real runtime with actual database (PGLite)
-   - Test complete user scenarios
-
-### Test Structure
-
-```
-src/
-  __tests__/              # All tests live inside src
-    *.test.ts            # Component tests (use Bun test runner)
-    e2e/                 # E2E tests (use ElizaOS test runner)
-      project-starter.e2e.ts  # E2E test suite
-      README.md          # E2E testing documentation
-  index.ts               # Export tests here: tests: [ProjectStarterTestSuite]
+# Via process manager
+pm2 start "bun run dev" --name "tekumi"
 ```
 
-### Running Tests
+For production, consider:
+- Setting `LOG_LEVEL=info` or `warn`
+- Using a PostgreSQL database (`DATABASE_URL`)
+- Enabling your model provider's paid tier for reliable inference
 
-- `elizaos test` - Run all tests (component + e2e)
-- `elizaos test component` - Run only component tests
-- `elizaos test e2e` - Run only E2E tests
+---
 
-### Writing Tests
-
-Component tests use bun:test:
-
-```typescript
-// Unit test example (__tests__/config.test.ts)
-describe('Configuration', () => {
-  it('should load configuration correctly', () => {
-    expect(config.debug).toBeDefined();
-  });
-});
-
-// Integration test example (__tests__/integration.test.ts)
-describe('Integration: Plugin with Character', () => {
-  it('should initialize character with plugins', async () => {
-    // Test interactions between components
-  });
-});
-```
-
-E2E tests use ElizaOS test interface:
-
-```typescript
-// E2E test example (e2e/project.test.ts)
-export class ProjectTestSuite implements TestSuite {
-  name = 'project_test_suite';
-  tests = [
-    {
-      name: 'project_initialization',
-      fn: async (runtime) => {
-        // Test project in a real runtime
-      },
-    },
-  ];
-}
-
-export default new ProjectTestSuite();
-```
-
-The test utilities in `__tests__/utils/` provide helper functions to simplify writing tests.
-
-## Configuration
-
-Customize your project by modifying:
-
-- `src/index.ts` - Main entry point
-- `src/character.ts` - Character definition
+Built with [ElizaOS](https://elizaos.ai) — the open-source AI agent framework.
