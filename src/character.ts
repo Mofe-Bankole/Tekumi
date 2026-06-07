@@ -12,6 +12,9 @@ export const character: Character = {
       ? ["@elizaos/plugin-ollama"]
       : []),
     ...(!process.env.IGNORE_BOOTSTRAP ? ["@elizaos/plugin-bootstrap"] : []),
+    ...(process.env.TELEGRAM_BOT_TOKEN?.trim()
+      ? ["@elizaos/plugin-telegram"]
+      : []),
   ],
   settings: {
     secrets: {},

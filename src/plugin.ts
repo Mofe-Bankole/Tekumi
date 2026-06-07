@@ -15,6 +15,7 @@ import {
 
 const RAWG_BASE = "https://api.rawg.io/api";
 const CHEAPSHARK_BASE = "https://www.cheapshark.com/api/1.0";
+const STEAM_API_BASE = "https://api.steampowered.com";
 
 function rawgKey(): string | null {
   return process.env.RAWG_API_KEY?.trim() || null;
@@ -127,18 +128,104 @@ class GamingService extends Service {
     }
   }
 
+  async getSteamAppId(gameName: string): Promise<number | null> {
+    const key = rawgKey();
+    if (!key) return null;
+
+    try {
+      const searchParams = new URLSearchParams({
+        key,
+        search: gameName,
+        page_size: "1",
+      });
+      const searchRes = await fetch(`${RAWG_BASE}/games?${searchParams}`);
+      if (!searchRes.ok) return null;
+      const searchData = (await searchRes.json()) as {
+        results?: Array<{ id: number }>;
+      };
+      if (!searchData.results?.length) return null;
+
+      const detailRes = await fetch(
+        `${RAWG_BASE}/games/${searchData.results[0].id}?key=${key}`,
+      );
+      if (!detailRes.ok) return null;
+      const detailData = (await detailRes.json()) as {
+        stores?: Array<{
+          url: string;
+          store: { id: number; slug: string };
+        }>;
+      };
+
+      const steamStore = detailData.stores?.find(
+        (s) => s.store.slug === "steam",
+      );
+      if (!steamStore?.url) return null;
+
+      const match = steamStore.url.match(/\/app\/(\d+)/);
+      return match ? parseInt(match[1], 10) : null;
+    } catch (e) {
+      logger.error({ error: e }, "Steam App ID lookup failed");
+      return null;
+    }
+  }
+
+  async getSteamNewsForApp(appId: number, count = 3): Promise<string> {
+    try {
+      const res = await fetch(
+        `${STEAM_API_BASE}/ISteamNews/GetNewsForApp/v2/?appid=${appId}&count=${count}`,
+      );
+      if (!res.ok) return "";
+      const data = (await res.json()) as {
+        appnews?: {
+          newsitems?: Array<{
+            title: string;
+            url: string;
+            feedlabel: string;
+            date: number;
+          }>;
+        };
+      };
+
+      if (!data.appnews?.newsitems?.length) return "";
+
+      return data.appnews.newsitems
+        .map((item) => {
+          const date = new Date(item.date * 1000).toISOString().slice(0, 10);
+          return `- ${date} — **[${item.title}](${item.url})** (Steam)`;
+        })
+        .join("\n");
+    } catch (e) {
+      logger.error({ error: e }, "Steam news fetch failed");
+      return "";
+    }
+  }
+
   async getGamingNews(query?: string): Promise<string> {
+    let steamSection = "";
+
+    if (query) {
+      const appId = await this.getSteamAppId(query);
+      if (appId) {
+        const steamNews = await this.getSteamNewsForApp(appId);
+        if (steamNews) {
+          steamSection = `\n\n**🎮 Steam News:**\n${steamNews}`;
+        }
+      }
+    }
+
     try {
       const url = query
         ? `https://newsapi.org/v2/everything?q=${encodeURIComponent(query + " gaming")}&language=en&sortBy=publishedAt&pageSize=5&apiKey=${process.env.NEWSAPI_KEY || ""}`
         : `https://newsapi.org/v2/everything?q=gaming&language=en&sortBy=publishedAt&pageSize=5&apiKey=${process.env.NEWSAPI_KEY || ""}`;
 
       if (!process.env.NEWSAPI_KEY?.trim()) {
-        return "NewsAPI key not configured. Set NEWSAPI_KEY in your env, or ask me to search for specific games.";
+        return steamSection || "NewsAPI key not configured. Set NEWSAPI_KEY in your env, or ask me to search for specific games.";
       }
 
       const res = await fetch(url);
-      if (!res.ok) return `News API error: ${res.status}`;
+      if (!res.ok) {
+        return steamSection || `News API error: ${res.status}`;
+      }
       const data = (await res.json()) as {
         articles?: Array<{
           title: string;
@@ -148,17 +235,21 @@ class GamingService extends Service {
         }>;
       };
 
-      if (!data.articles?.length) return "No recent gaming news found.";
+      if (!data.articles?.length) {
+        return steamSection || "No recent gaming news found.";
+      }
 
-      return data.articles
+      const newsItems = data.articles
         .map((a) => {
           const date = a.publishedAt?.slice(0, 10) || "";
           return `- ${date} — **[${a.title}](${a.url})** (${a.source?.name || "source"})`;
         })
         .join("\n");
+
+      return `${newsItems}${steamSection}`;
     } catch (e) {
       logger.error({ error: e }, "News fetch failed");
-      return "Failed to fetch gaming news. Try again later.";
+      return steamSection || "Failed to fetch gaming news. Try again later.";
     }
   }
 }
@@ -404,6 +495,95 @@ const gameNewsAction: Action = {
   ],
 };
 
+const steamNewsAction: Action = {
+  name: "STEAM_NEWS",
+  similes: ["STEAM_UPDATES", "STEAM_FEED", "PATCH_NOTES", "UPDATE"],
+  description: "Fetch game news directly from Steam using the game's Steam App ID",
+
+  validate: async (_runtime: IAgentRuntime, message: Memory) => {
+    const text = message.content?.text?.toLowerCase() || "";
+    return text.includes("steam") && (text.includes("news") || text.includes("update") || text.includes("patch"));
+  },
+
+  handler: async (
+    _runtime: IAgentRuntime,
+    message: Memory,
+    _state: State,
+    _options: any,
+    callback: HandlerCallback,
+  ): Promise<ActionResult> => {
+    try {
+      const service = _runtime.getService<GamingService>("gaming");
+      if (!service) throw new Error("GamingService not available");
+
+      const text = message.content?.text || "";
+      const gameName = text
+        .replace(/steam|news|update|patch|fetch|get|show|for|about/gi, "")
+        .trim();
+
+      if (!gameName || gameName.length < 2) {
+        await callback({
+          text: "Which game would you like Steam news for? Try: 'Steam news for Elden Ring'",
+          actions: ["STEAM_NEWS"],
+        });
+        return { success: true, text: "", data: { action: "STEAM_NEWS" } };
+      }
+
+      const appId = await service.getSteamAppId(gameName);
+      if (!appId) {
+        await callback({
+          text: `Couldn't find a Steam App ID for "${gameName}". Try a different game name.`,
+          error: true,
+        });
+        return {
+          success: false,
+          error: new Error(`No Steam App ID found for "${gameName}"`),
+        };
+      }
+
+      const steamNews = await service.getSteamNewsForApp(appId);
+      if (!steamNews) {
+        await callback({
+          text: `No recent Steam news found for "${gameName}" (App ID: ${appId}).`,
+          actions: ["STEAM_NEWS"],
+        });
+        return { success: true, text: "", data: { action: "STEAM_NEWS", appId } };
+      }
+
+      const storeUrl = steamUrl(appId);
+      const text_content = `**🎮 Steam News for "${gameName}":**\n\n${steamNews}\n\n[View on Steam](${storeUrl})`;
+
+      await callback({ text: text_content, actions: ["STEAM_NEWS"] });
+
+      return {
+        success: true,
+        text: text_content,
+        data: { action: "STEAM_NEWS", game: gameName, appId },
+      };
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      await callback({ text: `Steam news fetch failed: ${msg}`, error: true });
+      return {
+        success: false,
+        error: error instanceof Error ? error : new Error(String(error)),
+      };
+    }
+  },
+
+  examples: [
+    [
+      { name: "{{name1}}", content: { text: "Steam news for Elden Ring" } },
+      {
+        name: "Tekumi",
+        content: {
+          text: '**🎮 Steam News for "Elden Ring":**\n\n- 2024-06-21 — **[Elden Ring Patch 1.12 Available Now](https://steamcommunity.com/games/1245620/...)** (Steam)\n\n[View on Steam](https://store.steampowered.com/app/1245620)',
+          actions: ["STEAM_NEWS"],
+        },
+      },
+    ],
+  ],
+};
+
 const gamingProvider: Provider = {
   name: "GAMING_CONTEXT",
   description: "Provides gaming context about recent releases and trends",
@@ -524,7 +704,7 @@ const plugin: Plugin = {
     }
   },
   services: [GamingService],
-  actions: [searchGamesAction, getDealsAction, gameNewsAction],
+  actions: [searchGamesAction, getDealsAction, gameNewsAction, steamNewsAction],
   providers: [gamingProvider],
 };
 
