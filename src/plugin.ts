@@ -129,40 +129,19 @@ class GamingService extends Service {
   }
 
   async getSteamAppId(gameName: string): Promise<number | null> {
-    const key = rawgKey();
-    if (!key) return null;
-
     try {
-      const searchParams = new URLSearchParams({
-        key,
-        search: gameName,
-        page_size: "1",
+      const params = new URLSearchParams({
+        title: gameName,
+        limit: "1",
       });
-      const searchRes = await fetch(`${RAWG_BASE}/games?${searchParams}`);
-      if (!searchRes.ok) return null;
-      const searchData = (await searchRes.json()) as {
-        results?: Array<{ id: number }>;
-      };
-      if (!searchData.results?.length) return null;
-
-      const detailRes = await fetch(
-        `${RAWG_BASE}/games/${searchData.results[0].id}?key=${key}`,
-      );
-      if (!detailRes.ok) return null;
-      const detailData = (await detailRes.json()) as {
-        stores?: Array<{
-          url: string;
-          store: { id: number; slug: string };
-        }>;
-      };
-
-      const steamStore = detailData.stores?.find(
-        (s) => s.store.slug === "steam",
-      );
-      if (!steamStore?.url) return null;
-
-      const match = steamStore.url.match(/\/app\/(\d+)/);
-      return match ? parseInt(match[1], 10) : null;
+      const res = await fetch(`${CHEAPSHARK_BASE}/games?${params}`);
+      if (!res.ok) return null;
+      const data = (await res.json()) as Array<{
+        steamAppID: string;
+      }>;
+      if (!data?.length) return null;
+      const id = parseInt(data[0].steamAppID, 10);
+      return Number.isNaN(id) ? null : id;
     } catch (e) {
       logger.error({ error: e }, "Steam App ID lookup failed");
       return null;
@@ -219,13 +198,17 @@ class GamingService extends Service {
         : `https://newsapi.org/v2/everything?q=gaming&language=en&sortBy=publishedAt&pageSize=5&apiKey=${process.env.NEWSAPI_KEY || ""}`;
 
       if (!process.env.NEWSAPI_KEY?.trim()) {
-        return steamSection || "NewsAPI key not configured. Set NEWSAPI_KEY in your env, or ask me to search for specific games.";
+        return (
+          steamSection ||
+          "NewsAPI key not configured. Set NEWSAPI_KEY in your env, or ask me to search for specific games."
+        );
       }
 
       const res = await fetch(url);
       if (!res.ok) {
         return steamSection || `News API error: ${res.status}`;
       }
+      
       const data = (await res.json()) as {
         articles?: Array<{
           title: string;
@@ -498,11 +481,17 @@ const gameNewsAction: Action = {
 const steamNewsAction: Action = {
   name: "STEAM_NEWS",
   similes: ["STEAM_UPDATES", "STEAM_FEED", "PATCH_NOTES", "UPDATE"],
-  description: "Fetch game news directly from Steam using the game's Steam App ID",
+  description:
+    "Fetch game news directly from Steam using the game's Steam App ID",
 
   validate: async (_runtime: IAgentRuntime, message: Memory) => {
     const text = message.content?.text?.toLowerCase() || "";
-    return text.includes("steam") && (text.includes("news") || text.includes("update") || text.includes("patch"));
+    return (
+      text.includes("steam") &&
+      (text.includes("news") ||
+        text.includes("update") ||
+        text.includes("patch"))
+    );
   },
 
   handler: async (
@@ -547,7 +536,11 @@ const steamNewsAction: Action = {
           text: `No recent Steam news found for "${gameName}" (App ID: ${appId}).`,
           actions: ["STEAM_NEWS"],
         });
-        return { success: true, text: "", data: { action: "STEAM_NEWS", appId } };
+        return {
+          success: true,
+          text: "",
+          data: { action: "STEAM_NEWS", appId },
+        };
       }
 
       const storeUrl = steamUrl(appId);
